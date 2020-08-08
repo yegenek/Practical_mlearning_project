@@ -1,0 +1,182 @@
+---
+title: "Machine Learning Course Project"
+author: "Arda"
+date: "8 August 2020"
+output: html_document
+---
+
+
+In this project we are going to use machine learning methods to predict human activity classes including sitting-down, standing-up, standing, walking, and sitting. We are going to use HAR dataset which is collected from 8 hour activity of healthy subjects. The classes are coded as A,B,C,D and E. We will first look at the columns of the dataset. There are two datasets here one is for training and the the other one is testing the data. Testing dataset does not have classes.
+
+```{r include=FALSE}
+library(caret)
+library(tidyverse)
+library(MASS)
+library(car)
+```
+
+
+```{r}
+# Reading the datasets
+pml_training <- read.csv("pml-training.csv")
+pml_testing <- read.csv("pml-testing.csv")
+
+dim(pml_training)
+dim(pml_testing)
+
+pml_training$classe <- as.factor(pml_training$classe)
+
+```
+
+Notice that there are approximately 160 predictors in the dataset and we need to select some of these for a quick analysis. In this project we will look at the effect of parameters related with movement including acceleration,pitch,roll,yaw and magnet vs..  on discrimination between classes. We chose acceleration as it is one of the most important movement parameters related with human activity. In the dataset we will also use variables without any NA values. Test set has fewer parameters and since we will predict the testing set we will also select parameters included in the test set. We will use first a linear discriminant analysis then random forests to predict the test data.
+
+```{r}
+#selecting acceleration columns as predictors and classe as the dependent variable
+list_x <- sapply(pml_training, function(x) sum(is.na(x)))
+full_data_names <- names(list_x[list_x == 0])
+pml_training <- pml_training[,full_data_names]
+
+numerical_cols <-
+  pml_training %>%
+  select_if(is.numeric) %>%
+  colnames()
+
+pml_training <- pml_training[,c(numerical_cols,"classe")]
+
+numerical_cols_testing <- 
+  pml_testing %>%
+  select_if(is.numeric) %>%
+  colnames()
+
+pml_testing <- pml_testing[,c(numerical_cols_testing)]
+
+pml_select <- pml_training[,grepl("accel|classe|roll|pitch|magnet|gyros|yaw",colnames(pml_training))]
+test_select <- pml_testing[,grepl("accel|classe|roll|pitch|magnet|gyros|yaw",colnames(pml_testing))]
+# Selecting parameters included in the test set
+pml_select <- pml_select[,c(colnames(test_select),"classe")]
+
+```
+
+## Linear Discriminant Analysis with Cross Validation
+
+We have the variables we need in the dataframe. A linear discriminant analysis is generally the best choice when response variable includes more than 2 response classes (Introduction to Statistical Learning James et al. 2013).
+
+For cross validation we will divide our training set into 2 sets again, a training set again and an additional test or validation set. We will build lda model on the new training set then test its accuracy on the validation set.
+
+```{r}
+# Dividing training set into another training set and a validation (testing set)
+set.seed(1230)
+inTrain <- createDataPartition(y = pml_select$classe, p = 0.8, list = FALSE)
+
+pml_cv_train <- pml_select[inTrain,]
+pml_cv_test <- pml_select[-inTrain,]
+
+# Building the lda model
+lda_model <- train(classe~.,method = "lda",
+                   preProcess=c("center","scale"),data = pml_cv_train)
+
+# Predicting on the validation set
+predict_lda <- predict(lda_model,newdata = pml_cv_test)
+
+```
+
+Now we will look at the accuracy of the lda model
+
+```{r}
+confusionMatrix(predict_lda,reference = pml_cv_test$classe)
+```
+
+We have an accuracy of approximately 70% the accuracy is actually good considering that there are 5 classes. However this is below the project limit for 0.8 out of sample error.
+
+
+## Plots
+
+For plots we will first build the same lda model with the lda function from the car package.
+
+
+```{r}
+lda_model_2 <- lda(classe~.,data = pml_cv_train)
+
+#prediction with the model
+predict_lda_2 <- predict(lda_model_2,newdata = pml_cv_test)
+
+# Accuracy of model
+mean(predict_lda_2$class == pml_cv_test$classe)
+
+# Building the lda plot
+predict_values <- data.frame(classe = predict_lda_2$class,lda = predict_lda_2$x)
+
+ggplot(predict_values) +
+  geom_point(aes(lda.LD1,lda.LD2,colour = classe),alpha = 0.7) +
+  xlab("LD 1") +
+  ylab("LD 2") +
+  xlim(c(-5,7)) +
+  ylim(c(-5,5)) +
+  ggtitle("LDA plot for predictions")
+```
+
+## Predicting the Classes of Test set with LDA
+
+Now we will predict the testing set which have 20 observations
+
+```{r}
+
+predict_final <- predict(lda_model,newdata = test_select)
+print(predict_final)
+```
+
+
+## Random Forest models
+
+Although LDA has a good accuracy and its computation is very fast it is below the 0.80 accuracy and we need a better model. So we will build a random forest model next. Again we will divide the training data to a new training and testing set. Then we will build a random forest model with K-fold cross validation (k = 5). Since random forest models can take a lot of time we will use parallel processing.
+
+Then we will test our random forest on the separate validation set.
+
+
+```{r}
+
+set.seed(1958)
+inTrain <- createDataPartition(y = pml_select$classe, p = 0.8, list = FALSE)
+
+pml_cv_train <- pml_select[inTrain,]
+pml_cv_test <- pml_select[-inTrain,]
+
+
+ModelControl <- trainControl(method = "cv",
+number = 5,
+allowParallel = TRUE)
+
+system.time(rf_model <- train(classe~.,  method="rf",data=pml_cv_train,trControl = ModelControl))
+
+predict_rf <- predict(rf_model,newdata = pml_cv_test)
+confusionMatrix(predict_rf,pml_cv_test$classe)
+
+
+```
+
+Random Forest prediction has a much higher accuracy (approximately 1) so it is much better to use random forest compared to linear discriminant analysis.
+
+## Prediction with Random Forest
+
+
+
+```{r }
+predict_final_rf <- predict(rf_model,test_select)
+print(predict_final_rf)
+```
+
+The above prediction is much more better as the accuracy is close to 1.
+
+References
+
+Data Source
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz6UWeyo0Rv
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2013). An introduction to statistical learning (Vol. 112, p. 18). New York: springer.
+
+
+
+
